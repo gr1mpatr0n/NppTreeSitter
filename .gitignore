@@ -1,0 +1,39 @@
+# Build artifacts
+build/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile.cmake
+
+# Compiled objects
+*.o
+*.obj
+*.a
+*.lib
+*.exp
+*.pdb
+*.ilk
+
+# DLLs (built, not vendored)
+*.dll
+*.so
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.cache/
+compile_commands.json
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Wine testing
+*.exe
+

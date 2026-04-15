@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+    NppTreeSitter — example Notepad++ style configurator XML.
+
+    Place this file in your Notepad++ plugins config directory alongside
+    the DLL.  Notepad++ will read it when the "rust" lexer is active.
+
+    The file should be named:  rust.xml
+    Located at:  %APPDATA%\Notepad++\plugins\config\NppTreeSitter.xml
+                 (or the equivalent portable path)
+
+    Each <WordsStyle> entry corresponds to one of the 32 style slots
+    defined in styles.conf.  Adjust colours to your preference.
+-->
+<NotepadPlus>
+    <LexerStyles>
+        <LexerType name="rust" desc="Rust (TreeSitter)" ext="rs">
+            <WordsStyle styleID="0"  name="Default"              fgColor="D4D4D4" bgColor="1E1E1E" fontStyle="0" />
+            <WordsStyle styleID="1"  name="Keyword"              fgColor="569CD6" bgColor="1E1E1E" fontStyle="2" />
+            <WordsStyle styleID="2"  name="Keyword (function)"   fgColor="569CD6" bgColor="1E1E1E" fontStyle="2" />
+            <WordsStyle styleID="3"  name="Keyword (return)"     fgColor="569CD6" bgColor="1E1E1E" fontStyle="2" />
+            <WordsStyle styleID="4"  name="Keyword (operator)"   fgColor="569CD6" bgColor="1E1E1E" fontStyle="0" />
+            <WordsStyle styleID="5"  name="String"               fgColor="CE9178" bgColor="1E1E1E" fontStyle="0" />
+            <WordsStyle styleID="6"  name="String (special)"     fgColor="D7BA7D" bgColor="1E1E1E" fontStyle="0" />
+            <WordsStyle styleID="7"  name="Number"               fgColor="B5CEA8" bgColor="1E1E1E" fontStyle="0" />
+            <WordsStyle styleID="8"  name="Float"                fgColor="B5CEA8" bgColor="1E1E1E" fontStyle="0" />
+            <WordsStyle styleID="9"  name="Function"             fgColor="DCDCAA" bgColor="1E1E1E" fontStyle="0" />
+            <WordsStyle styleID="10" name="Function (builtin)"   fgColor="DCDCAA" bgColor="1E1E1E" fontStyle="1" />
+            <WordsStyle styleID="11" name="Function (call)"      fgColor="DCDCAA" bgColor="1E1E1E" fontStyle="0" />
+            <WordsStyle styleID="12" name="Method"               fgColor="DCDCAA" bgColor="1E1E1E" fontStyle="0" />
+            <WordsStyle styleID="13" name="Method (call)"        fgColor="DCDCAA" bgColor="1E1E1E" fontStyle="0" />
+            <WordsStyle styleID="14" name="Type"                 fgColor="4EC9B0" bgColor="1E1E1E" fontStyle="0" />
+            <WordsStyle styleID="15" name="Type (builtin)"       fgColor="4EC9B0" bgColor="1E1E1E" fontStyle="1" />
+            <WordsStyle styleID="16" name="Type (qualifier)"     fgColor="4EC9B0" bgColor="1E1E1E" fontStyle="2" />
+            <WordsStyle styleID="17" name="Variable"             fgColor="9CDCFE" bgColor="1E1E1E" fontStyle="0" />
+            <WordsStyle styleID="18" name="Variable (builtin)"   fgColor="9CDCFE" bgColor="1E1E1E" fontStyle="1" />
+            <WordsStyle styleID="19" name="Variable (parameter)" fgColor="9CDCFE" bgColor="1E1E1E" fontStyle="1" />
+            <WordsStyle styleID="20" name="Property"             fgColor="9CDCFE" bgColor="1E1E1E" fontStyle="0" />
+            <WordsStyle styleID="21" name="Field"                fgColor="9CDCFE" bgColor="1E1E1E" fontStyle="0" />
+            <WordsStyle styleID="22" name="Constant"             fgColor="4FC1FF" bgColor="1E1E1E" fontStyle="2" />
+            <WordsStyle styleID="23" name="Constant (builtin)"   fgColor="4FC1FF" bgColor="1E1E1E" fontStyle="3" />
+            <WordsStyle styleID="24" name="Comment"              fgColor="6A9955" bgColor="1E1E1E" fontStyle="0" />
+            <WordsStyle styleID="25" name="Operator"             fgColor="D4D4D4" bgColor="1E1E1E" fontStyle="0" />
+            <WordsStyle styleID="26" name="Punctuation"          fgColor="808080" bgColor="1E1E1E" fontStyle="0" />
+            <WordsStyle styleID="27" name="Bracket"              fgColor="FFD700" bgColor="1E1E1E" fontStyle="0" />
+            <WordsStyle styleID="28" name="Delimiter"            fgColor="808080" bgColor="1E1E1E" fontStyle="0" />
+            <WordsStyle styleID="29" name="Label"                fgColor="C586C0" bgColor="1E1E1E" fontStyle="0" />
+            <WordsStyle styleID="30" name="Attribute"            fgColor="9CDCFE" bgColor="1E1E1E" fontStyle="1" />
+            <WordsStyle styleID="31" name="Constructor"          fgColor="4EC9B0" bgColor="1E1E1E" fontStyle="0" />
+        </LexerType>
+    </LexerStyles>
+</NotepadPlus>

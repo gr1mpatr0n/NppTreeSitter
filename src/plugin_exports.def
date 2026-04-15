@@ -1,0 +1,25 @@
+; src/plugin_exports.def
+; Exported symbols for the NppTreeSitter plugin DLL.
+;
+; Standard Notepad++ plugin exports (cdecl):
+;   setInfo, getName, getFuncsArray, beNotified, messageProc, isUnicode
+;
+; Lexilla-compatible lexer exports (stdcall):
+;   GetLexerCount, GetLexerName, GetLexerStatusText, CreateLexer
+
+LIBRARY NppTreeSitter
+
+EXPORTS
+    ; Notepad++ plugin interface
+    setInfo
+    getName
+    getFuncsArray
+    beNotified
+    messageProc
+    isUnicode
+
+    ; Lexilla lexer interface
+    GetLexerCount
+    GetLexerName
+    GetLexerStatusText
+    CreateLexer
