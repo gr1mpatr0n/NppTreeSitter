@@ -25,7 +25,7 @@ if(NOT DEFINED TREESITTER_ROOT)
     FetchContent_Declare(
         tree_sitter
         GIT_REPOSITORY https://github.com/tree-sitter/tree-sitter.git
-        GIT_TAG        v0.24.7
+        GIT_TAG        v0.25.6
         GIT_SHALLOW    TRUE
     )
     FetchContent_MakeAvailable(tree_sitter)

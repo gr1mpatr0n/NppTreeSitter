@@ -2,12 +2,14 @@
 # from Arch Linux using MinGW-w64.
 #
 # Prerequisites (Arch):
-#   sudo pacman -S mingw-w64-gcc cmake git
+#   sudo pacman -S mingw-w64-gcc cmake git bash
 #
 # Targets:
 #   make plugin           — build the plugin DLL
 #   make grammar-zig      — build the Zig grammar DLL
 #   make grammar NAME=c   — build an arbitrary grammar (cloned from tree-sitter-grammars)
+
+SHELL := /bin/bash
 #   make all              — plugin + zig grammar
 #   make package          — assemble a ready-to-deploy directory tree
 #   make clean            — remove build artifacts
@@ -23,11 +25,18 @@ MINGW_CC    := x86_64-w64-mingw32-gcc
 MINGW_CXX   := x86_64-w64-mingw32-g++
 
 # tree-sitter version to fetch (must match the plugin's FetchContent).
-TS_VERSION  := v0.24.7
+# v0.25.6 supports grammar ABI versions 13–15.
+TS_VERSION  := v0.25.6
 
-.PHONY: all plugin grammar-zig grammar package clean
+.PHONY: all plugin grammar package clean install-wine
 
-all: plugin grammar-zig package
+# Default: build plugin only.
+# Add grammars individually then install:
+#   make plugin
+#   make grammar NAME=zig
+#   make grammar NAME=c
+#   make install-wine
+all: plugin
 
 # ============================================================================
 # Plugin DLL
@@ -38,28 +47,6 @@ plugin:
 	      -DCMAKE_BUILD_TYPE=Release
 	cmake --build $(PLUGIN_BUILD) --config Release -j$$(nproc)
 	@echo "✅ Plugin DLL: $(PLUGIN_BUILD)/NppTreeSitter.dll"
-
-# ============================================================================
-# Grammar DLL — Zig
-# ============================================================================
-grammar-zig: $(GRAMMAR_DIR)/tree-sitter-zig/src/parser.c $(BUILD_DIR)/tree-sitter/lib/src/lib.c
-	@mkdir -p $(GRAMMAR_DIR)/out/zig
-	$(MINGW_CC) -shared -O2 -DNDEBUG \
-	    -I $(BUILD_DIR)/tree-sitter/lib/include \
-	    -I $(BUILD_DIR)/tree-sitter/lib/src \
-	    $(GRAMMAR_DIR)/tree-sitter-zig/src/parser.c \
-	    $(BUILD_DIR)/tree-sitter/lib/src/lib.c \
-	    -o $(GRAMMAR_DIR)/out/zig/grammar.dll \
-	    -Wl,--export-all-symbols \
-	    -static-libgcc
-	@echo "✅ Zig grammar DLL: $(GRAMMAR_DIR)/out/zig/grammar.dll"
-
-# Clone the Zig grammar if not present.
-$(GRAMMAR_DIR)/tree-sitter-zig/src/parser.c:
-	@mkdir -p $(GRAMMAR_DIR)
-	git clone --depth 1 --branch v1.1.2 \
-	    https://github.com/tree-sitter-grammars/tree-sitter-zig.git \
-	    $(GRAMMAR_DIR)/tree-sitter-zig
 
 # Clone tree-sitter core (for headers + lib.c used by grammar compilation).
 $(BUILD_DIR)/tree-sitter/lib/src/lib.c:
@@ -110,65 +97,107 @@ endif
 	@echo "✅ $(NAME) grammar DLL: $(GRAMMAR_DIR)/out/$(NAME)/grammar.dll"
 
 # ============================================================================
-# Package — assemble the deployment tree
+# Package — assemble the deployment tree.
+#
+# Discovers ALL grammars that have been built under build/grammars/out/
+# and packages them, along with their highlights.scm and extensions.txt.
+# Also generates the NppTreeSitter.xml with a <LexerType> per grammar.
 # ============================================================================
-package: plugin grammar-zig
+package: plugin
 	@echo "Assembling package..."
 	@mkdir -p $(PACKAGE_DIR)/plugins/NppTreeSitter
-	@mkdir -p $(PACKAGE_DIR)/config/NppTreeSitter/grammars/zig
+	@mkdir -p $(PACKAGE_DIR)/config/NppTreeSitter
 
 	@# Plugin DLL
 	cp $(PLUGIN_BUILD)/NppTreeSitter.dll \
 	   $(PACKAGE_DIR)/plugins/NppTreeSitter/
 
-	@# Zig grammar
-	cp $(GRAMMAR_DIR)/out/zig/grammar.dll \
-	   $(PACKAGE_DIR)/config/NppTreeSitter/grammars/zig/
-	cp $(GRAMMAR_DIR)/tree-sitter-zig/queries/highlights.scm \
-	   $(PACKAGE_DIR)/config/NppTreeSitter/grammars/zig/
-	@# Copy locals.scm if it exists
-	@if [ -f "$(GRAMMAR_DIR)/tree-sitter-zig/queries/locals.scm" ]; then \
-	    cp $(GRAMMAR_DIR)/tree-sitter-zig/queries/locals.scm \
-	       $(PACKAGE_DIR)/config/NppTreeSitter/grammars/zig/; \
-	fi
-	cp config/grammars/rust/extensions.txt \
-	   $(PACKAGE_DIR)/config/NppTreeSitter/grammars/zig/extensions.txt 2>/dev/null \
-	   || printf '.zig\n.zon\n' > $(PACKAGE_DIR)/config/NppTreeSitter/grammars/zig/extensions.txt
-
 	@# Global style map
 	cp config/styles.conf $(PACKAGE_DIR)/config/NppTreeSitter/
 
-	@# Generate NppTreeSitter.xml — Notepad++ REQUIRES this file in
-	@# plugins\Config\ or it refuses to load the lexer plugin.
-	@# The plugin auto-generates it at runtime too, but shipping a
-	@# static copy avoids the chicken-and-egg problem on first install.
+	@# --- Discover and package all built grammars ---
+	@found=0; \
+	for dll in $(GRAMMAR_DIR)/out/*/grammar.dll; do \
+	    [ -f "$$dll" ] || continue; \
+	    lang=$$(basename $$(dirname "$$dll")); \
+	    echo "  Packaging grammar: $$lang"; \
+	    mkdir -p "$(PACKAGE_DIR)/config/NppTreeSitter/grammars/$$lang"; \
+	    cp "$$dll" "$(PACKAGE_DIR)/config/NppTreeSitter/grammars/$$lang/"; \
+	    src="$(GRAMMAR_DIR)/tree-sitter-$$lang"; \
+	    if [ -f "$$src/queries/highlights.scm" ]; then \
+	        cp "$$src/queries/highlights.scm" \
+	           "$(PACKAGE_DIR)/config/NppTreeSitter/grammars/$$lang/"; \
+	    fi; \
+	    if [ -f "$$src/queries/locals.scm" ]; then \
+	        cp "$$src/queries/locals.scm" \
+	           "$(PACKAGE_DIR)/config/NppTreeSitter/grammars/$$lang/"; \
+	    fi; \
+	    if [ ! -f "$(PACKAGE_DIR)/config/NppTreeSitter/grammars/$$lang/extensions.txt" ]; then \
+	        if   [ "$$lang" = "zig" ];        then printf '.zig\n.zon\n'; \
+	        elif [ "$$lang" = "c" ];          then printf '.c\n.h\n'; \
+	        elif [ "$$lang" = "cpp" ];        then printf '.cpp\n.hpp\n.cc\n.hh\n'; \
+	        elif [ "$$lang" = "rust" ];       then printf '.rs\n'; \
+	        elif [ "$$lang" = "python" ];     then printf '.py\n.pyw\n'; \
+	        elif [ "$$lang" = "go" ];         then printf '.go\n'; \
+	        elif [ "$$lang" = "javascript" ]; then printf '.js\n.mjs\n.cjs\n'; \
+	        elif [ "$$lang" = "typescript" ]; then printf '.ts\n.mts\n.cts\n'; \
+	        elif [ "$$lang" = "lua" ];        then printf '.lua\n'; \
+	        elif [ "$$lang" = "bash" ];       then printf '.sh\n.bash\n'; \
+	        elif [ "$$lang" = "json" ];       then printf '.json\n'; \
+	        elif [ "$$lang" = "toml" ];       then printf '.toml\n'; \
+	        elif [ "$$lang" = "yaml" ];       then printf '.yml\n.yaml\n'; \
+	        else printf '.%s\n' "$$lang"; \
+	        fi > "$(PACKAGE_DIR)/config/NppTreeSitter/grammars/$$lang/extensions.txt"; \
+	    fi; \
+	    found=$$((found + 1)); \
+	done; \
+	if [ "$$found" -eq 0 ]; then \
+	    echo "  ⚠  No grammars built yet. Run 'make grammar-zig' or 'make grammar NAME=c' first."; \
+	fi
+
+	@# --- Generate NppTreeSitter.xml with a <LexerType> per grammar ---
+	@# Notepad++ REQUIRES this file or it refuses to load the lexer plugin.
+	@# The plugin also auto-generates it at runtime, but shipping a static
+	@# copy avoids the chicken-and-egg problem on first install.
 	@echo '<?xml version="1.0" encoding="UTF-8" ?>' \
 	    > $(PACKAGE_DIR)/config/NppTreeSitter.xml
 	@echo '<!-- Auto-generated by NppTreeSitter build. -->' \
 	    >> $(PACKAGE_DIR)/config/NppTreeSitter.xml
 	@echo '<NotepadPlus>' >> $(PACKAGE_DIR)/config/NppTreeSitter.xml
 	@echo '    <LexerStyles>' >> $(PACKAGE_DIR)/config/NppTreeSitter.xml
-	@echo '        <LexerType name="zig" desc="Zig (TreeSitter)" ext="zig zon">' \
-	    >> $(PACKAGE_DIR)/config/NppTreeSitter.xml
-	@for id_name_fg in \
-	    "0:Default:000000:0" "1:Keyword:0000FF:2" "2:Keyword (function):0000FF:2" \
-	    "3:Keyword (return):0000FF:2" "4:Keyword (operator):8B008B:0" \
-	    "5:String:A31515:0" "6:String (special):B56508:0" "7:Number:098658:0" \
-	    "8:Float:098658:0" "9:Function:795E26:0" "10:Function (builtin):795E26:1" \
-	    "11:Function (call):795E26:0" "12:Method:795E26:0" "13:Method (call):795E26:0" \
-	    "14:Type:267F99:0" "15:Type (builtin):267F99:1" "16:Type (qualifier):267F99:2" \
-	    "17:Variable:001080:0" "18:Variable (builtin):001080:1" \
-	    "19:Variable (parameter):001080:1" "20:Property:001080:0" "21:Field:001080:0" \
-	    "22:Constant:0070C1:2" "23:Constant (builtin):0070C1:3" "24:Comment:008000:0" \
-	    "25:Operator:000000:0" "26:Punctuation:505050:0" "27:Bracket:AF00DB:0" \
-	    "28:Delimiter:505050:0" "29:Label:8B008B:0" "30:Attribute:267F99:1" \
-	    "31:Constructor:267F99:0"; \
-	do \
-	    IFS=':' read -r sid sname sfg sfs <<< "$$id_name_fg"; \
-	    echo "            <WordsStyle styleID=\"$$sid\" name=\"$$sname\" fgColor=\"$$sfg\" fontStyle=\"$$sfs\" />" \
+	@for extfile in $(PACKAGE_DIR)/config/NppTreeSitter/grammars/*/extensions.txt; do \
+	    [ -f "$$extfile" ] || continue; \
+	    lang=$$(basename $$(dirname "$$extfile")); \
+	    exts=""; \
+	    while IFS= read -r ext || [ -n "$$ext" ]; do \
+	        ext=$${ext#.}; \
+	        ext=$$(echo "$$ext" | tr -d '\r '); \
+	        [ -z "$$ext" ] && continue; \
+	        [ -n "$$exts" ] && exts="$$exts "; \
+	        exts="$$exts$$ext"; \
+	    done < "$$extfile"; \
+	    echo "        <LexerType name=\"$$lang\" desc=\"$$lang (TreeSitter)\" ext=\"$$exts\">" \
 	        >> $(PACKAGE_DIR)/config/NppTreeSitter.xml; \
+	    for id_name_fg in \
+	        "0:Default:000000:0" "1:Keyword:0000FF:2" "2:Keyword (function):0000FF:2" \
+	        "3:Keyword (return):0000FF:2" "4:Keyword (operator):8B008B:0" \
+	        "5:String:A31515:0" "6:String (special):B56508:0" "7:Number:098658:0" \
+	        "8:Float:098658:0" "9:Function:795E26:0" "10:Function (builtin):795E26:1" \
+	        "11:Function (call):795E26:0" "12:Method:795E26:0" "13:Method (call):795E26:0" \
+	        "14:Type:267F99:0" "15:Type (builtin):267F99:1" "16:Type (qualifier):267F99:2" \
+	        "17:Variable:001080:0" "18:Variable (builtin):001080:1" \
+	        "19:Variable (parameter):001080:1" "20:Property:001080:0" "21:Field:001080:0" \
+	        "22:Constant:0070C1:2" "23:Constant (builtin):0070C1:3" "24:Comment:008000:0" \
+	        "25:Operator:000000:0" "26:Punctuation:505050:0" "27:Bracket:AF00DB:0" \
+	        "28:Delimiter:505050:0" "29:Label:8B008B:0" "30:Attribute:267F99:1" \
+	        "31:Constructor:267F99:0"; \
+	    do \
+	        IFS=':' read -r sid sname sfg sfs <<< "$$id_name_fg"; \
+	        echo "            <WordsStyle styleID=\"$$sid\" name=\"$$sname\" fgColor=\"$$sfg\" fontStyle=\"$$sfs\" />" \
+	            >> $(PACKAGE_DIR)/config/NppTreeSitter.xml; \
+	    done; \
+	    echo '        </LexerType>' >> $(PACKAGE_DIR)/config/NppTreeSitter.xml; \
 	done
-	@echo '        </LexerType>' >> $(PACKAGE_DIR)/config/NppTreeSitter.xml
 	@echo '    </LexerStyles>' >> $(PACKAGE_DIR)/config/NppTreeSitter.xml
 	@echo '</NotepadPlus>' >> $(PACKAGE_DIR)/config/NppTreeSitter.xml
 
@@ -206,10 +235,17 @@ install-wine: package
 	cp $(PACKAGE_DIR)/plugins/NppTreeSitter/NppTreeSitter.dll \
 	   "$(WINE_NPP)/plugins/NppTreeSitter/"
 	mkdir -p "$(WINE_APPDATA)/plugins/config"
+	@# Remove old config so new grammars + XML are picked up cleanly.
+	rm -rf "$(WINE_APPDATA)/plugins/config/NppTreeSitter"
+	rm -f  "$(WINE_APPDATA)/plugins/config/NppTreeSitter.xml"
 	cp -r $(PACKAGE_DIR)/config/NppTreeSitter \
 	   "$(WINE_APPDATA)/plugins/config/"
 	cp $(PACKAGE_DIR)/config/NppTreeSitter.xml \
 	   "$(WINE_APPDATA)/plugins/config/"
 	@echo ""
-	@echo "✅ Installed.  Launch Notepad++ with:"
+	@echo "✅ Installed.  Grammars:"
+	@ls -1 "$(WINE_APPDATA)/plugins/config/NppTreeSitter/grammars/" 2>/dev/null \
+	    | sed 's/^/   /' || echo "   (none)"
+	@echo ""
+	@echo "Launch Notepad++ with:"
 	@echo "   wine \"$(WINE_NPP)/notepad++.exe\""
