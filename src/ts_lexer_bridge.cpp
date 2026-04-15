@@ -56,12 +56,17 @@ void TreeSitterLexer::full_parse(Scintilla::IDocument* doc) {
     Sci_Position len = doc->Length();
     const char* buf = doc->BufferPointer();
 
-    // For incremental parsing we'd use ts_parser_parse() with the old tree.
-    // On the first call, tree_ is nullptr so this is a full parse.
-    TSTree* new_tree = ts_parser_parse_string(parser_, tree_, buf,
-                                              static_cast<uint32_t>(len));
-    if (tree_) ts_tree_delete(tree_);
-    tree_ = new_tree;
+    // Discard the old tree before reparsing.  We pass nullptr as old_tree
+    // to force a full reparse.  If we passed the old tree without calling
+    // ts_tree_edit() first, tree-sitter would assume nothing changed and
+    // return an identical tree — which is why edits weren't being reflected.
+    if (tree_) {
+        ts_tree_delete(tree_);
+        tree_ = nullptr;
+    }
+
+    tree_ = ts_parser_parse_string(parser_, nullptr, buf,
+                                   static_cast<uint32_t>(len));
 }
 
 void TreeSitterLexer::Lex(Sci_PositionU startPos, Sci_Position lengthDoc,
