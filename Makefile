@@ -305,17 +305,20 @@ package: plugin
 # Installer — NSIS .exe installer (cross-compiled from Linux)
 #
 # Prerequisites:
-#   Arch:   sudo pacman -S nsis
+#   Arch:   yay -S nsis
 #   Ubuntu: sudo apt-get install nsis
+#
+# Generates grammar sections dynamically from whatever was built.
 # ============================================================================
 VERSION ?= 0.0.0
 
 installer: package
 	@echo "Building installer..."
-	makensis -V2 \
+	python3 installer/generate_nsi.py $(PACKAGE_DIR) $(BUILD_DIR)/NppTreeSitter.nsi
+	@makensis -V2 \
 	    -DVERSION=$(VERSION) \
 	    -DPACKAGE_DIR=../build/package \
-	    installer/NppTreeSitter.nsi
+	    $(BUILD_DIR)/NppTreeSitter.nsi
 	@echo "✅ Installer: build/NppTreeSitter-$(VERSION)-setup.exe"
 
 # ============================================================================
