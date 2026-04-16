@@ -11,6 +11,9 @@ on:
   pull_request:
     branches: [main, master]
 
+permissions:
+  contents: write
+
 env:
   # Grammars to build.  These are languages NOT offered by Notepad++ built-in.
   # Each entry becomes a `make grammar-<name>` target.
