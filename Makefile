@@ -66,16 +66,25 @@ $(BUILD_DIR)/tree-sitter/lib/src/lib.c:
 # The tree-sitter core is cloned once as a shared prerequisite.
 # ============================================================================
 grammar-%: $(BUILD_DIR)/tree-sitter/lib/src/lib.c
-	@lang="$*"; \
+	@set -e; \
+	lang="$*"; \
 	mkdir -p "$(GRAMMAR_DIR)/out/$$lang"; \
 	if [ ! -d "$(GRAMMAR_DIR)/tree-sitter-$$lang" ]; then \
 	    echo "Cloning tree-sitter-$$lang..."; \
-	    git clone --depth 1 \
+	    if ! GIT_TERMINAL_PROMPT=0 git clone --depth 1 \
 	        "https://github.com/tree-sitter-grammars/tree-sitter-$$lang.git" \
-	        "$(GRAMMAR_DIR)/tree-sitter-$$lang" 2>/dev/null \
-	    || git clone --depth 1 \
-	        "https://github.com/tree-sitter/tree-sitter-$$lang.git" \
-	        "$(GRAMMAR_DIR)/tree-sitter-$$lang"; \
+	        "$(GRAMMAR_DIR)/tree-sitter-$$lang" 2>/dev/null; then \
+	        if ! GIT_TERMINAL_PROMPT=0 git clone --depth 1 \
+	            "https://github.com/tree-sitter/tree-sitter-$$lang.git" \
+	            "$(GRAMMAR_DIR)/tree-sitter-$$lang"; then \
+	            echo "❌ $$lang: failed to clone grammar repository"; \
+	            exit 1; \
+	        fi; \
+	    fi; \
+	fi; \
+	if [ ! -f "$(GRAMMAR_DIR)/tree-sitter-$$lang/src/parser.c" ]; then \
+	    echo "❌ $$lang: parser.c not found in cloned repository"; \
+	    exit 1; \
 	fi; \
 	SCANNER=""; \
 	if [ -f "$(GRAMMAR_DIR)/tree-sitter-$$lang/src/scanner.c" ]; then \
@@ -89,7 +98,7 @@ grammar-%: $(BUILD_DIR)/tree-sitter/lib/src/lib.c
 	    $(BUILD_DIR)/tree-sitter/lib/src/lib.c \
 	    -o "$(GRAMMAR_DIR)/out/$$lang/grammar.dll" \
 	    -Wl,--export-all-symbols \
-	    -static-libgcc; \
+	    -static-libgcc && \
 	echo "✅ $$lang grammar DLL: $(GRAMMAR_DIR)/out/$$lang/grammar.dll"
 
 
