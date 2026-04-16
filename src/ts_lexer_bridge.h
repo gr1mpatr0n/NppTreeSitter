@@ -1,10 +1,10 @@
 // src/ts_lexer_bridge.h
 // ILexer5 implementation that delegates to tree-sitter for lexing/folding.
 //
-// Supports incremental parsing: on subsequent Lex() calls after the initial
-// parse, we compute a TSInputEdit from the difference between the old tree's
-// size and the current document, apply it to the old tree, then reparse.
-// tree-sitter only reparses the affected region.
+// Parsing strategy: full reparse on every Lex() call.  tree-sitter parses
+// at tens of MB/s so this is sub-millisecond for typical editing files.
+// A full reparse is always correct regardless of edit pattern (multi-cursor,
+// find-replace-all, undo/redo, external file changes, etc.).
 #pragma once
 
 #include "scintilla/ILexer.h"
@@ -69,20 +69,10 @@ private:
     const StyleMap*     styles_;
 
     TSParser*           parser_;
-    TSTree*             tree_;
     std::mutex          mu_;
 
-    // The document length as of the last successful parse.
-    // Used to detect insertions/deletions for incremental parsing.
-    uint32_t            prev_doc_len_ = 0;
-
-    /// Parse the document, incrementally if possible.
-    /// `edit_pos` is a hint for where the edit occurred (typically startPos
-    /// from the Lex() call).
-    void parse(Scintilla::IDocument* doc, uint32_t edit_pos);
-
-    /// Byte offset → TSPoint using IDocument line mapping.
-    static TSPoint byte_to_point(Scintilla::IDocument* doc, uint32_t byte_offset);
+    /// Full-parse the document and return the tree.  Caller owns it.
+    TSTree* parse(Scintilla::IDocument* doc);
 };
 
 } // namespace npp_ts
