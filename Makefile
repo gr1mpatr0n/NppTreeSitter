@@ -28,7 +28,7 @@ MINGW_CXX   := x86_64-w64-mingw32-g++
 # v0.25.6 supports grammar ABI versions 13–15.
 TS_VERSION  := v0.25.6
 
-.PHONY: all plugin package clean install-wine
+.PHONY: all plugin package clean install-wine installer release
 
 # Build plugin + any grammars in one invocation:
 #   make plugin grammar-zig grammar-c grammar-cpp
@@ -300,6 +300,32 @@ package: plugin
 	@echo "  Copy plugins/NppTreeSitter/         → \$$WINEPREFIX/drive_c/Program Files/Notepad++/plugins/"
 	@echo "  Copy config/NppTreeSitter/          → \$$WINEPREFIX/drive_c/users/\$$(whoami)/AppData/Roaming/Notepad++/plugins/config/"
 	@echo "  Copy config/NppTreeSitter.xml       → \$$WINEPREFIX/drive_c/users/\$$(whoami)/AppData/Roaming/Notepad++/plugins/config/"
+
+# ============================================================================
+# Installer — NSIS .exe installer (cross-compiled from Linux)
+#
+# Prerequisites:
+#   Arch:   sudo pacman -S nsis
+#   Ubuntu: sudo apt-get install nsis
+# ============================================================================
+VERSION ?= 0.0.0
+
+installer: package
+	@echo "Building installer..."
+	makensis -V2 \
+	    -DVERSION=$(VERSION) \
+	    -DPACKAGE_DIR=../build/package \
+	    installer/NppTreeSitter.nsi
+	@echo "✅ Installer: build/NppTreeSitter-$(VERSION)-setup.exe"
+
+# ============================================================================
+# Release — build ZIP + installer for distribution
+# ============================================================================
+release: package installer
+	@cd $(PACKAGE_DIR) && zip -r ../../build/NppTreeSitter-$(VERSION).zip .
+	@echo ""
+	@echo "✅ Release artifacts in build/:"
+	@ls -lh build/NppTreeSitter-$(VERSION)-setup.exe build/NppTreeSitter-$(VERSION).zip
 
 # ============================================================================
 # Clean

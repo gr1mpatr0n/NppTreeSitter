@@ -106,16 +106,32 @@ jobs:
           echo "=== XML ==="
           grep "LexerType" build/package/config/NppTreeSitter.xml
 
-      - name: Create release archive
+      - name: Create release archives
         run: |
+          VERSION="${GITHUB_REF_NAME:-dev}"
           cd build/package
-          zip -r ../../NppTreeSitter-${{ github.ref_name || 'dev' }}.zip .
+          zip -r "../../NppTreeSitter-${VERSION}.zip" .
+          cd ../..
+          echo "ZIP: NppTreeSitter-${VERSION}.zip"
+
+      - name: Build installer
+        run: |
+          sudo apt-get install -y -qq nsis
+          VERSION="${GITHUB_REF_NAME:-dev}"
+          makensis -V2 \
+              -DVERSION="${VERSION}" \
+              -DPACKAGE_DIR=../build/package \
+              installer/NppTreeSitter.nsi
+          echo "Installer: build/NppTreeSitter-${VERSION}-setup.exe"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: NppTreeSitter-package
-          path: build/package/
+          path: |
+            build/package/
+            build/NppTreeSitter-*.zip
+            build/NppTreeSitter-*-setup.exe
           retention-days: 14
 
       # --- Release (only on vX.X.X tags) ---
@@ -130,9 +146,14 @@ jobs:
 
             Tree-sitter-based syntax highlighting for Notepad++.
 
-            ### Installation
+            ### Installation (Installer)
 
-            1. Extract the zip.
+            Download and run `NppTreeSitter-${{ github.ref_name }}-setup.exe`.
+            It will install the plugin DLL and grammar files to the correct locations automatically.
+
+            ### Installation (Manual / ZIP)
+
+            1. Extract `NppTreeSitter-${{ github.ref_name }}.zip`.
             2. Copy `plugins/NppTreeSitter/NppTreeSitter.dll` to `<Notepad++>/plugins/NppTreeSitter/`.
             3. Copy the `config/NppTreeSitter/` folder and `config/NppTreeSitter.xml` to `%APPDATA%\Notepad++\plugins\config\`.
             4. Restart Notepad++.
@@ -150,5 +171,6 @@ jobs:
             If you find this useful, consider supporting development on [Patreon](https://www.patreon.com/cw/BenMordaunt).
           files: |
             NppTreeSitter-${{ github.ref_name }}.zip
+            build/NppTreeSitter-${{ github.ref_name }}-setup.exe
           draft: false
           prerelease: false
