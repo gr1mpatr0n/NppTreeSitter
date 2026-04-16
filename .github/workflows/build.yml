@@ -118,11 +118,7 @@ jobs:
         run: |
           sudo apt-get install -y -qq nsis
           VERSION="${GITHUB_REF_NAME:-dev}"
-          makensis -V2 \
-              -DVERSION="${VERSION}" \
-              -DPACKAGE_DIR=../build/package \
-              installer/NppTreeSitter.nsi
-          echo "Installer: build/NppTreeSitter-${VERSION}-setup.exe"
+          make installer VERSION="${VERSION}"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
