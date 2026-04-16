@@ -77,7 +77,7 @@ $(BUILD_DIR)/tree-sitter/lib/src/lib.c:
 # Grammars not under tree-sitter-grammars/ or tree-sitter/ orgs.
 REPO_elixir     ?= https://github.com/elixir-lang/tree-sitter-elixir.git
 REPO_kotlin     ?= https://github.com/fwcd/tree-sitter-kotlin.git
-REPO_dart       ?= https://github.com/UserNobwordy/tree-sitter-dart.git
+REPO_dart       ?= https://github.com/UserNobody14/tree-sitter-dart.git
 REPO_gleam      ?= https://github.com/gleam-lang/tree-sitter-gleam.git
 REPO_nix        ?= https://github.com/nix-community/tree-sitter-nix.git
 REPO_vue        ?= https://github.com/tree-sitter-grammars/tree-sitter-vue.git
@@ -101,7 +101,6 @@ grammar-%: $(BUILD_DIR)/tree-sitter/lib/src/lib.c
 	mkdir -p "$(GRAMMAR_DIR)/out/$$lang"; \
 	if [ ! -d "$(GRAMMAR_DIR)/tree-sitter-$$lang" ]; then \
 	    echo "Cloning tree-sitter-$$lang..."; \
-	    repo_var="REPO_$$lang"; \
 	    repo="$(REPO_$*)"; \
 	    if [ -n "$$repo" ]; then \
 	        GIT_TERMINAL_PROMPT=0 git clone --depth 1 "$$repo" \
@@ -121,18 +120,28 @@ grammar-%: $(BUILD_DIR)/tree-sitter/lib/src/lib.c
 	        exit 1; \
 	    fi; \
 	fi; \
-	if [ ! -f "$(GRAMMAR_DIR)/tree-sitter-$$lang/src/parser.c" ]; then \
-	    echo "❌ $$lang: parser.c not found in cloned repository"; \
+	SRCDIR="$(GRAMMAR_DIR)/tree-sitter-$$lang/src"; \
+	if [ -f "$(GRAMMAR_DIR)/tree-sitter-$$lang/tree-sitter.json" ]; then \
+	    subpath=$$(grep -oP '"path"\s*:\s*"\K[^"]+' \
+	        "$(GRAMMAR_DIR)/tree-sitter-$$lang/tree-sitter.json" | head -1); \
+	    if [ -n "$$subpath" ] && [ "$$subpath" != "." ] && \
+	       [ -f "$(GRAMMAR_DIR)/tree-sitter-$$lang/$$subpath/src/parser.c" ]; then \
+	        SRCDIR="$(GRAMMAR_DIR)/tree-sitter-$$lang/$$subpath/src"; \
+	    fi; \
+	fi; \
+	if [ ! -f "$$SRCDIR/parser.c" ]; then \
+	    echo "❌ $$lang: parser.c not found (searched $$SRCDIR)"; \
 	    exit 1; \
 	fi; \
 	SCANNER=""; \
-	if [ -f "$(GRAMMAR_DIR)/tree-sitter-$$lang/src/scanner.c" ]; then \
-	    SCANNER="$(GRAMMAR_DIR)/tree-sitter-$$lang/src/scanner.c"; \
+	if [ -f "$$SRCDIR/scanner.c" ]; then \
+	    SCANNER="$$SRCDIR/scanner.c"; \
 	fi; \
-	$(MINGW_CC) -shared -O2 -DNDEBUG \
+	$(MINGW_CC) -shared -O2 \
 	    -I $(BUILD_DIR)/tree-sitter/lib/include \
 	    -I $(BUILD_DIR)/tree-sitter/lib/src \
-	    "$(GRAMMAR_DIR)/tree-sitter-$$lang/src/parser.c" \
+	    -I "$$SRCDIR" \
+	    "$$SRCDIR/parser.c" \
 	    $$SCANNER \
 	    $(BUILD_DIR)/tree-sitter/lib/src/lib.c \
 	    -o "$(GRAMMAR_DIR)/out/$$lang/grammar.dll" \
@@ -173,9 +182,15 @@ package: plugin
 	    if [ -f "$$src/queries/highlights.scm" ]; then \
 	        cp "$$src/queries/highlights.scm" \
 	           "$(PACKAGE_DIR)/config/NppTreeSitter/grammars/$$lang/"; \
+	    elif [ -f "$$src/queries/$$lang/highlights.scm" ]; then \
+	        cp "$$src/queries/$$lang/highlights.scm" \
+	           "$(PACKAGE_DIR)/config/NppTreeSitter/grammars/$$lang/"; \
 	    fi; \
 	    if [ -f "$$src/queries/locals.scm" ]; then \
 	        cp "$$src/queries/locals.scm" \
+	           "$(PACKAGE_DIR)/config/NppTreeSitter/grammars/$$lang/"; \
+	    elif [ -f "$$src/queries/$$lang/locals.scm" ]; then \
+	        cp "$$src/queries/$$lang/locals.scm" \
 	           "$(PACKAGE_DIR)/config/NppTreeSitter/grammars/$$lang/"; \
 	    fi; \
 	    if [ -f "$$src/tree-sitter.json" ]; then \
