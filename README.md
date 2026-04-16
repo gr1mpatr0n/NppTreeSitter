@@ -9,10 +9,12 @@ NppTreeSitter implements the **ILexer5** interface (Scintilla 5 / Lexilla) and
 registers itself as a lexer plugin.  When Notepad++ asks the plugin to style
 a document, the plugin:
 
-1. Parses the document text with tree-sitter (full parse; incremental hooks
-   are stubbed for a future version).
-2. Runs the grammar's `highlights.scm` query to identify capture names
-   (e.g. `@keyword`, `@function`, `@string`).
+1. Parses the document text with tree-sitter using **incremental parsing** —
+   only the changed region is reparsed on each edit, keeping highlighting
+   responsive even on large files.
+2. Runs the grammar's `highlights.scm` query (and optional `base_highlights.scm`
+   for grammars that inherit from another, like C++ inheriting from C) to
+   identify capture names (e.g. `@keyword`, `@function`, `@string`).
 3. Maps each capture name to one of 32 Scintilla style slots via `styles.conf`.
 4. Applies the styles through the `IDocument` interface.
 5. Derives fold regions from the syntax tree (any named node spanning multiple
@@ -22,109 +24,135 @@ The grammars themselves — the `.dll` parser libraries and `.scm` query files �
 are loaded at runtime from a config directory, so you can add support for any
 language that has a tree-sitter grammar without recompiling the plugin.
 
-## Building
+A `NppTreeSitter.xml` style definition file is auto-generated on first run
+(or at build time) so Notepad++ can register the languages in its Language
+menu and Style Configurator.
+
+## Building (Arch Linux / MinGW cross-compilation)
 
 ### Prerequisites
 
-- **CMake** ≥ 3.20
-- **MSVC** (Visual Studio 2019 or later, with the C++ workload)
-- **Git** (for FetchContent to pull tree-sitter)
-
-### Steps
-
-```powershell
-# Clone this repository
-git clone https://github.com/yourname/npp-treesitter.git
-cd npp-treesitter
-
-# Configure (64-bit)
-cmake -B build -G "Visual Studio 17 2022" -A x64
-
-# Build
-cmake --build build --config Release
-
-# The DLL lands in build/Release/NppTreeSitter.dll
+```bash
+sudo pacman -S mingw-w64-gcc cmake git bash
 ```
 
-For a 32-bit build (if you use 32-bit Notepad++), change `-A x64` to `-A Win32`.
+### Quick start
+
+```bash
+make plugin                # build the plugin DLL
+make grammar NAME=zig      # build the Zig grammar
+make grammar NAME=c        # build the C grammar
+make grammar NAME=cpp      # build C++ (auto-detects C base query dependency)
+make install-wine          # package + install into Wine prefix
+```
+
+The `install-wine` target assembles a deployment package, copies it into your
+Wine prefix, and prints the installed grammars.
+
+### What `make grammar` does
+
+1. Clones the grammar repo from `tree-sitter-grammars` (or `tree-sitter`) on
+   GitHub.
+2. Cross-compiles `parser.c` (and `scanner.c` if present) into `grammar.dll`
+   using MinGW, linking tree-sitter v0.25.6 statically.
+3. For grammars that inherit queries from a base grammar (detected via
+   `tree-sitter.json`), the base grammar is automatically cloned and its
+   `highlights.scm` is saved as `base_highlights.scm`.
+
+### MSVC builds (Windows native)
+
+```powershell
+cmake -B build -G "Visual Studio 17 2022" -A x64
+cmake --build build --config Release
+```
+
+For a 32-bit build, change `-A x64` to `-A Win32`.
 
 ### Using a local tree-sitter checkout
 
-If you've already cloned tree-sitter, pass its path:
-
-```powershell
-cmake -B build -DTREESITTER_ROOT="C:/path/to/tree-sitter" ...
+```bash
+cmake -B build -DTREESITTER_ROOT="/path/to/tree-sitter" ...
 ```
 
 ## Installation
 
-1. Copy `NppTreeSitter.dll` into your Notepad++ `plugins/NppTreeSitter/` directory.
+### From a build
+
+```bash
+make plugin
+make grammar NAME=zig
+make grammar NAME=c
+make grammar NAME=cpp
+make install-wine
+```
+
+### Manual installation
+
+1. Copy `NppTreeSitter.dll` into `<Notepad++>/plugins/NppTreeSitter/`.
 
 2. Create the config directory and add grammars:
 
 ```
-%APPDATA%\Notepad++\plugins\config\NppTreeSitter\
-├── styles.conf                    # capture → style mapping
-└── grammars/
-    ├── rust/
-    │   ├── grammar.dll            # compiled tree-sitter-rust parser
-    │   ├── highlights.scm         # highlight queries
-    │   ├── locals.scm             # (optional) local variable queries
-    │   ├── extensions.txt         # file extensions, one per line
-    │   └── rust.xml               # Notepad++ style definitions
-    ├── python/
-    │   ├── grammar.dll
-    │   ├── highlights.scm
-    │   ├── extensions.txt
-    │   └── python.xml
-    └── ...
+%APPDATA%\Notepad++\plugins\config\
+├── NppTreeSitter.xml              # auto-generated style definitions
+└── NppTreeSitter\
+    ├── styles.conf                # capture → style mapping
+    └── grammars\
+        ├── zig\
+        │   ├── grammar.dll        # compiled parser (exports tree_sitter_zig)
+        │   ├── highlights.scm     # highlight queries
+        │   └── extensions.txt     # .zig / .zon
+        ├── cpp\
+        │   ├── grammar.dll        # compiled parser (exports tree_sitter_cpp)
+        │   ├── highlights.scm     # C++-specific highlight queries
+        │   ├── base_highlights.scm # C highlight queries (inherited)
+        │   └── extensions.txt     # .cpp / .hpp / .cc / .hh
+        └── ...
 ```
 
-3. Restart Notepad++.  Each grammar will appear in the **Language** menu.
+3. Restart Notepad++.  Each grammar appears in the **Language** menu.
 
-## Building grammar DLLs
+### Under Wine
 
-Each tree-sitter grammar repository (e.g. `tree-sitter-rust`, `tree-sitter-python`)
-can be compiled into a shared library.  The plugin expects the library to export
-a function named `tree_sitter_<language>()`.
+The default Wine prefix places the config at:
 
-### Quick recipe (using tree-sitter CLI)
+```
+~/.wine/drive_c/users/<you>/AppData/Roaming/Notepad++/plugins/config/
+```
+
+`make install-wine` handles this automatically.  Set `WINEPREFIX` if you
+use a non-default prefix:
 
 ```bash
-# Install the tree-sitter CLI
-npm install -g tree-sitter-cli
-
-# Clone a grammar
-git clone https://github.com/tree-sitter/tree-sitter-rust.git
-cd tree-sitter-rust
-
-# Generate + compile
-tree-sitter generate
+WINEPREFIX=~/.wine-npp make install-wine
 ```
 
-This produces a `tree-sitter-rust.dll` (or `.so`).  Rename it to `grammar.dll`
-and drop it into the grammar directory.
+## Query inheritance (base_highlights.scm)
 
-### Manual compilation (MSVC)
+Some tree-sitter grammars layer their highlight queries on top of a base
+grammar.  For example, tree-sitter-cpp's `tree-sitter.json` declares:
 
-```powershell
-cl /LD /O2 /I tree-sitter/lib/include ^
-   src/parser.c src/scanner.c ^
-   /Fe:grammar.dll /link /DEF:grammar.def
+```json
+"highlights": [
+    "node_modules/tree-sitter-c/queries/highlights.scm",
+    "queries/highlights.scm"
+]
 ```
 
-Where `grammar.def` contains:
+The Makefile detects this automatically during packaging: it clones the base
+grammar, extracts its `highlights.scm`, and saves it as `base_highlights.scm`
+alongside the derived grammar's own `highlights.scm`.
 
-```def
-EXPORTS
-    tree_sitter_rust
-```
+At runtime, the plugin prepends `base_highlights.scm` to `highlights.scm`
+before compiling the query, matching tree-sitter's concatenation convention.
+
+This also applies to grammars like TypeScript (inherits from JavaScript).
 
 ## Configuration
 
 ### styles.conf
 
-Maps tree-sitter capture names to Scintilla style IDs (0–31).  The format is:
+Maps tree-sitter capture names to Scintilla style IDs (0–31):
 
 ```ini
 # capture_name = style_id
@@ -136,21 +164,23 @@ comment = 24
 Dotted names are resolved with prefix fallback: if `function.builtin` isn't
 in the map, `function` is tried.
 
-### Style XML
+### NppTreeSitter.xml
 
-Notepad++ reads an XML file to determine colours for each style ID.  See
-`config/grammars/rust/rust.xml` for an example.  The `fontStyle` attribute
-encodes Bold=2, Italic=1, Underline=4 (summed).
+Notepad++ requires a style XML file named `NppTreeSitter.xml` in
+`plugins\Config\`.  The plugin auto-generates this on first run from the
+installed grammars.  The Makefile also generates it at build time.
 
-Copy the XML to `%APPDATA%\Notepad++\plugins\config\` so the Style Configurator
-can find it.
+To regenerate after adding grammars, delete the existing XML and restart
+Notepad++ (or re-run `make install-wine`).
+
+Colours can be customised via **Settings → Style Configurator** in Notepad++.
 
 ## Architecture
 
 ```
 plugin_exports.cpp    ← C-linkage DLL entry points (Npp + Lexilla)
-plugin_main.cpp       ← Plugin lifecycle, singletons
-ts_lexer_bridge.cpp   ← ILexer5 implementation (Lex / Fold)
+plugin_main.cpp       ← Plugin lifecycle, singletons, style XML generation
+ts_lexer_bridge.cpp   ← ILexer5 implementation (Lex / Fold / incremental parse)
 ts_query_runner.cpp   ← Runs highlights.scm queries, produces styled ranges
 style_map.cpp         ← Capture name → style ID mapping
 grammar_registry.cpp  ← Discovers & loads grammar DLLs + .scm files
@@ -159,29 +189,42 @@ grammar_registry.cpp  ← Discovers & loads grammar DLLs + .scm files
 ### Data flow
 
 ```
-Notepad++ ──► CreateLexer("rust")
+Notepad++ ──► CreateLexer("zig")
                 │
                 ▼
           TreeSitterLexer(grammar_info, style_map)
                 │
   Scintilla ──► Lex(startPos, length, …, IDocument*)
                 │
-                ├─► ts_parser_parse_string(…)     [tree-sitter parse]
-                ├─► run_highlight_query(…)         [query captures]
-                └─► IDocument::StartStyling()      [apply styles]
+                ├─► ts_tree_edit(old_tree, &edit)  [apply edit delta]
+                ├─► ts_parser_parse_string(…)      [incremental reparse]
+                ├─► run_highlight_query(…)          [query captures]
+                └─► IDocument::StartStyling()       [apply styles]
                     IDocument::SetStyleFor()
 
   Scintilla ──► Fold(…)
                 │
-                └─► fold_walk(root_node, …)        [derive fold regions]
+                └─► fold_walk(root_node, …)         [derive fold regions]
 ```
 
-## Limitations & future work
+### Incremental parsing
 
-- **Full reparse on every Lex() call.**  The `TSInputEdit` incremental parsing
-  API is not yet wired up.  This is fine for files up to ~100 KB but will be
-  slow on very large files.  The infrastructure is in place (`tree_` is kept
-  alive between calls); it just needs the edit deltas from `SCN_MODIFIED`.
+The lexer tracks the document length from the previous parse.  On each
+`Lex()` call, if the length has changed, it computes a `TSInputEdit` from
+the delta:
+
+- `startPos` (from Scintilla) indicates where the edit occurred.
+- `new_len - prev_len` gives the number of bytes inserted or deleted.
+- Byte offsets are converted to row/column points via `IDocument` methods.
+
+The edit is applied to the old tree with `ts_tree_edit()`, then the edited
+tree is passed to `ts_parser_parse_string()`.  tree-sitter only reparses
+the affected subtree, making subsequent highlighting updates fast even for
+large files.
+
+For the first parse (no old tree), a full parse is performed.
+
+## Limitations & future work
 
 - **32 style slots.**  Scintilla gives custom lexers style IDs 0–255, but
   Notepad++'s Style Configurator practically supports ~32 per language.
@@ -194,8 +237,11 @@ Notepad++ ──► CreateLexer("rust")
 - **No `locals.scm` support.**  The local-variable scoping queries are loaded
   but not used during highlighting.
 
-- **Style XML generation.**  Currently you have to write the XML by hand.
-  A future version could auto-generate it from `styles.conf`.
+- **Edit heuristic is approximate.**  The incremental parsing reconstructs
+  edit positions from `startPos` and the document length delta.  For
+  multi-cursor or find-replace-all operations, the heuristic may not be
+  exact — tree-sitter handles this gracefully by reparsing more than
+  strictly necessary.
 
 ## Licence
 
