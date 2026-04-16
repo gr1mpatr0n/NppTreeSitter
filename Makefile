@@ -132,6 +132,31 @@ package: plugin
 	        cp "$$src/queries/locals.scm" \
 	           "$(PACKAGE_DIR)/config/NppTreeSitter/grammars/$$lang/"; \
 	    fi; \
+	    if [ -f "$$src/tree-sitter.json" ]; then \
+	        base_hl_paths=$$(grep -oP '"node_modules/tree-sitter-\K[^/]+(?=/queries/highlights\.scm")' \
+	                         "$$src/tree-sitter.json" 2>/dev/null); \
+	        if [ -n "$$base_hl_paths" ]; then \
+	            > "$(PACKAGE_DIR)/config/NppTreeSitter/grammars/$$lang/base_highlights.scm"; \
+	            for base_lang in $$base_hl_paths; do \
+	                echo "    ↳ inherits highlights from: $$base_lang"; \
+	                base_src="$(GRAMMAR_DIR)/tree-sitter-$$base_lang"; \
+	                if [ ! -d "$$base_src" ]; then \
+	                    echo "    ↳ cloning tree-sitter-$$base_lang for base queries..."; \
+	                    git clone --depth 1 \
+	                        "https://github.com/tree-sitter-grammars/tree-sitter-$$base_lang.git" \
+	                        "$$base_src" 2>/dev/null \
+	                    || git clone --depth 1 \
+	                        "https://github.com/tree-sitter/tree-sitter-$$base_lang.git" \
+	                        "$$base_src" 2>/dev/null; \
+	                fi; \
+	                if [ -f "$$base_src/queries/highlights.scm" ]; then \
+	                    cat "$$base_src/queries/highlights.scm" \
+	                        >> "$(PACKAGE_DIR)/config/NppTreeSitter/grammars/$$lang/base_highlights.scm"; \
+	                    echo "" >> "$(PACKAGE_DIR)/config/NppTreeSitter/grammars/$$lang/base_highlights.scm"; \
+	                fi; \
+	            done; \
+	        fi; \
+	    fi; \
 	    if [ ! -f "$(PACKAGE_DIR)/config/NppTreeSitter/grammars/$$lang/extensions.txt" ]; then \
 	        if   [ "$$lang" = "zig" ];        then printf '.zig\n.zon\n'; \
 	        elif [ "$$lang" = "c" ];          then printf '.c\n.h\n'; \

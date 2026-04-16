@@ -1,5 +1,10 @@
 // src/ts_lexer_bridge.h
 // ILexer5 implementation that delegates to tree-sitter for lexing/folding.
+//
+// Supports incremental parsing: on subsequent Lex() calls after the initial
+// parse, we compute a TSInputEdit from the difference between the old tree's
+// size and the current document, apply it to the old tree, then reparse.
+// tree-sitter only reparses the affected region.
 #pragma once
 
 #include "scintilla/ILexer.h"
@@ -13,16 +18,11 @@
 
 namespace npp_ts {
 
-/// A Scintilla ILexer5 implementation backed by tree-sitter.
-///
-/// One instance is created per "language" (grammar) via CreateLexer().
-/// Notepad++ calls Lex() and Fold() on it whenever re-styling is needed.
 class TreeSitterLexer : public Scintilla::ILexer5 {
 public:
     explicit TreeSitterLexer(const GrammarInfo* grammar, const StyleMap* styles);
     ~TreeSitterLexer();
 
-    // Non-copyable.
     TreeSitterLexer(const TreeSitterLexer&) = delete;
     TreeSitterLexer& operator=(const TreeSitterLexer&) = delete;
 
@@ -69,11 +69,20 @@ private:
     const StyleMap*     styles_;
 
     TSParser*           parser_;
-    TSTree*             tree_;      // incrementally maintained
-    std::mutex          mu_;       // protects tree_ / parser_
+    TSTree*             tree_;
+    std::mutex          mu_;
 
-    // Helper: full-parse from IDocument text.
-    void full_parse(Scintilla::IDocument* doc);
+    // The document length as of the last successful parse.
+    // Used to detect insertions/deletions for incremental parsing.
+    uint32_t            prev_doc_len_ = 0;
+
+    /// Parse the document, incrementally if possible.
+    /// `edit_pos` is a hint for where the edit occurred (typically startPos
+    /// from the Lex() call).
+    void parse(Scintilla::IDocument* doc, uint32_t edit_pos);
+
+    /// Byte offset → TSPoint using IDocument line mapping.
+    static TSPoint byte_to_point(Scintilla::IDocument* doc, uint32_t byte_offset);
 };
 
 } // namespace npp_ts

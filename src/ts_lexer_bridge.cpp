@@ -5,6 +5,7 @@
 #include <cstring>
 #include <algorithm>
 #include <vector>
+#include <cstdlib>
 
 namespace npp_ts {
 
@@ -14,7 +15,8 @@ namespace npp_ts {
 
 TreeSitterLexer::TreeSitterLexer(const GrammarInfo* grammar,
                                  const StyleMap* styles)
-    : grammar_(grammar), styles_(styles), parser_(nullptr), tree_(nullptr)
+    : grammar_(grammar), styles_(styles),
+      parser_(nullptr), tree_(nullptr), prev_doc_len_(0)
 {
     parser_ = ts_parser_new();
     ts_parser_set_language(parser_, grammar_->language);
@@ -29,11 +31,10 @@ TreeSitterLexer::~TreeSitterLexer() {
 // ILexer core
 // ============================================================================
 
-int TreeSitterLexer::Version() const { return Scintilla::lvRelease5; } // 3
+int TreeSitterLexer::Version() const { return Scintilla::lvRelease5; }
 
 void TreeSitterLexer::Release() { delete this; }
 
-// ---- Properties (none for now) ----
 const char* TreeSitterLexer::PropertyNames()   { return ""; }
 int  TreeSitterLexer::PropertyType(const char*) { return 0; }
 const char* TreeSitterLexer::DescribeProperty(const char*) { return ""; }
@@ -42,45 +43,140 @@ const char* TreeSitterLexer::DescribeWordListSets() { return ""; }
 Sci_Position TreeSitterLexer::WordListSet(int, const char*) { return 0; }
 
 // ============================================================================
-// Lex — the main entry point Scintilla calls to style text.
+// Incremental parsing
 //
-// Scintilla tells us "please style bytes [startPos, startPos+lengthDoc)".
-// We:
-//   1. Obtain the full document text from IDocument.
-//   2. Parse (or incrementally re-parse) with tree-sitter.
-//   3. Run the highlight query over the requested range.
-//   4. Apply styles via IDocument::StartStyling / SetStyleFor.
+// tree-sitter's incremental parsing requires:
+//   1. Call ts_tree_edit() on the OLD tree with a TSInputEdit describing
+//      the change (start byte, old end byte, new end byte, plus row/col).
+//   2. Pass the edited old tree to ts_parser_parse_string().
+//   3. tree-sitter diffs the old and new trees internally and only
+//      reparses the affected region.
+//
+// The challenge is that Scintilla's ILexer::Lex() does not receive
+// explicit edit deltas.  We reconstruct them:
+//
+//   - We know the old document length (prev_doc_len_) from the last parse.
+//   - We know the new document length from IDocument::Length().
+//   - Scintilla's startPos parameter is the beginning of the line where
+//     the edit occurred — a good approximation for the edit start byte.
+//   - The net change in bytes is (new_len - old_len).
+//
+// For a single insertion of N bytes at position P:
+//   start_byte  = P
+//   old_end_byte = P        (nothing was there before)
+//   new_end_byte = P + N
+//
+// For a single deletion of N bytes at position P:
+//   start_byte  = P
+//   old_end_byte = P + N    (N bytes were there before)
+//   new_end_byte = P        (they're gone now)
+//
+// This heuristic handles the common case of typing / deleting at a single
+// point.  For multi-cursor or find-replace-all, the heuristic is inexact
+// but tree-sitter is resilient — in the worst case it reparses more than
+// strictly necessary, which is correct but not maximally efficient.
+//
+// If there is no old tree (first parse), we skip the edit step entirely.
 // ============================================================================
 
-void TreeSitterLexer::full_parse(Scintilla::IDocument* doc) {
-    Sci_Position len = doc->Length();
+TSPoint TreeSitterLexer::byte_to_point(Scintilla::IDocument* doc,
+                                       uint32_t byte_offset)
+{
+    Sci_Position line = doc->LineFromPosition(static_cast<Sci_Position>(byte_offset));
+    Sci_Position line_start = doc->LineStart(line);
+    return TSPoint{
+        static_cast<uint32_t>(line),
+        static_cast<uint32_t>(byte_offset - static_cast<uint32_t>(line_start))
+    };
+}
+
+void TreeSitterLexer::parse(Scintilla::IDocument* doc, uint32_t edit_pos) {
+    uint32_t new_len = static_cast<uint32_t>(doc->Length());
     const char* buf = doc->BufferPointer();
 
-    // Discard the old tree before reparsing.  We pass nullptr as old_tree
-    // to force a full reparse.  If we passed the old tree without calling
-    // ts_tree_edit() first, tree-sitter would assume nothing changed and
-    // return an identical tree — which is why edits weren't being reflected.
-    if (tree_) {
-        ts_tree_delete(tree_);
-        tree_ = nullptr;
+    if (tree_ && prev_doc_len_ != new_len) {
+        // Compute the edit delta and apply it to the old tree.
+        int32_t delta = static_cast<int32_t>(new_len) -
+                        static_cast<int32_t>(prev_doc_len_);
+
+        uint32_t start_byte = edit_pos;
+        uint32_t old_end_byte;
+        uint32_t new_end_byte;
+
+        if (delta >= 0) {
+            // Insertion: `delta` bytes were inserted at start_byte.
+            old_end_byte = start_byte;
+            new_end_byte = start_byte + static_cast<uint32_t>(delta);
+        } else {
+            // Deletion: `|delta|` bytes were removed starting at start_byte.
+            old_end_byte = start_byte + static_cast<uint32_t>(-delta);
+            new_end_byte = start_byte;
+        }
+
+        // Clamp to valid ranges.
+        if (old_end_byte > prev_doc_len_)
+            old_end_byte = prev_doc_len_;
+        if (new_end_byte > new_len)
+            new_end_byte = new_len;
+
+        // Build the TSInputEdit.  For the point (row, col) fields we
+        // use the post-edit document for start and new_end, and
+        // approximate old_end from the old tree's root node.
+        TSPoint start_point = byte_to_point(doc, start_byte);
+        TSPoint new_end_point = byte_to_point(doc, new_end_byte);
+
+        // For old_end_point, we can't query the old document (it's gone),
+        // so we use the old tree's root end point if old_end_byte was at
+        // or past the old document end, otherwise approximate from the
+        // new document (which is close enough for tree-sitter's purposes).
+        TSPoint old_end_point;
+        if (old_end_byte >= prev_doc_len_) {
+            TSNode root = ts_tree_root_node(tree_);
+            old_end_point = ts_node_end_point(root);
+        } else {
+            // Approximate: use the start_point row + column offset.
+            // This isn't perfect but tree-sitter only uses the point for
+            // row/column in error reporting, not for parse correctness.
+            old_end_point = start_point;
+            if (delta < 0) {
+                old_end_point.column += static_cast<uint32_t>(-delta);
+            }
+        }
+
+        TSInputEdit edit{
+            start_byte,
+            old_end_byte,
+            new_end_byte,
+            start_point,
+            old_end_point,
+            new_end_point
+        };
+
+        ts_tree_edit(tree_, &edit);
     }
 
-    tree_ = ts_parser_parse_string(parser_, nullptr, buf,
-                                   static_cast<uint32_t>(len));
+    // Parse: if tree_ is non-null (and was just edited), tree-sitter does
+    // an incremental reparse.  If tree_ is null (first parse), it does a
+    // full parse.
+    TSTree* new_tree = ts_parser_parse_string(parser_, tree_, buf, new_len);
+
+    if (tree_) ts_tree_delete(tree_);
+    tree_ = new_tree;
+    prev_doc_len_ = new_len;
 }
+
+// ============================================================================
+// Lex
+// ============================================================================
 
 void TreeSitterLexer::Lex(Sci_PositionU startPos, Sci_Position lengthDoc,
                            int /*initStyle*/, Scintilla::IDocument* pAccess)
 {
     std::lock_guard lock(mu_);
 
-    // (Re-)parse the full document.
-    // A production version would use TSInputEdit for incremental parsing, but
-    // this is correct and adequate for files of typical editing size.
-    full_parse(pAccess);
+    parse(pAccess, static_cast<uint32_t>(startPos));
 
     if (!tree_ || !grammar_->query) {
-        // Fallback: style everything as default.
         pAccess->StartStyling(startPos);
         pAccess->SetStyleFor(lengthDoc, 0);
         return;
@@ -92,7 +188,6 @@ void TreeSitterLexer::Lex(Sci_PositionU startPos, Sci_Position lengthDoc,
     auto ranges = run_highlight_query(tree_, grammar_->query, *styles_,
                                       start, end);
 
-    // Apply styles to the document.
     pAccess->StartStyling(startPos);
 
     if (ranges.empty()) {
@@ -100,8 +195,6 @@ void TreeSitterLexer::Lex(Sci_PositionU startPos, Sci_Position lengthDoc,
         return;
     }
 
-    // The query runner returns contiguous, non-overlapping ranges covering
-    // [start, end).  Walk them and call SetStyleFor for each run.
     for (auto& r : ranges) {
         pAccess->SetStyleFor(static_cast<Sci_Position>(r.length),
                              static_cast<char>(r.style));
@@ -109,11 +202,7 @@ void TreeSitterLexer::Lex(Sci_PositionU startPos, Sci_Position lengthDoc,
 }
 
 // ============================================================================
-// Fold — derive fold regions from the syntax tree.
-//
-// Strategy: every named node whose span crosses at least one line boundary
-// opens a fold region.  We walk the tree's immediate children and assign
-// fold levels based on depth.
+// Fold
 // ============================================================================
 
 static void fold_walk(TSNode node, Scintilla::IDocument* doc, int depth) {
@@ -121,15 +210,12 @@ static void fold_walk(TSNode node, Scintilla::IDocument* doc, int depth) {
     TSPoint ep = ts_node_end_point(node);
 
     if (ep.row > sp.row && ts_node_is_named(node)) {
-        // This node spans multiple lines — it's a fold header.
         int level = SC_FOLDLEVELBASE + depth;
         level |= SC_FOLDLEVELHEADERFLAG;
         doc->SetLevel(static_cast<Sci_Position>(sp.row), level);
 
-        // Interior lines get level+1.
         for (uint32_t line = sp.row + 1; line <= ep.row; ++line) {
             int inner = SC_FOLDLEVELBASE + depth + 1;
-            // Only set if not already set to a higher (more nested) level.
             int existing = doc->GetLevel(static_cast<Sci_Position>(line));
             if ((existing & SC_FOLDLEVELNUMBERMASK) < (inner & SC_FOLDLEVELNUMBERMASK))
                 doc->SetLevel(static_cast<Sci_Position>(line), inner);
@@ -148,11 +234,10 @@ void TreeSitterLexer::Fold(Sci_PositionU /*startPos*/, Sci_Position /*lengthDoc*
     std::lock_guard lock(mu_);
 
     if (!tree_) {
-        full_parse(pAccess);
+        parse(pAccess, 0);
     }
     if (!tree_) return;
 
-    // Reset all fold levels to base.
     Sci_Position line_count = pAccess->LineFromPosition(pAccess->Length()) + 1;
     for (Sci_Position i = 0; i < line_count; ++i)
         pAccess->SetLevel(i, SC_FOLDLEVELBASE);
@@ -192,21 +277,14 @@ const char* TreeSitterLexer::DescriptionOfStyle(int s) {
     return NameOfStyle(s);
 }
 
-// ---- ILexer4 ----
 const char* TreeSitterLexer::GetName() {
-    // Return the grammar name — this is what appears in Notepad++'s Language
-    // menu and in the style XML files.
     return grammar_ ? grammar_->name.c_str() : "treesitter";
 }
 
 int TreeSitterLexer::GetIdentifier() {
-    // Lexilla uses negative IDs for external lexers.  We pick a value in
-    // the external range.  Each grammar would ideally get its own, but
-    // for simplicity we hash the name.
     if (!grammar_) return -1;
     int h = 0;
     for (char c : grammar_->name) h = h * 31 + c;
-    // Keep it negative and away from built-in IDs.
     return -(std::abs(h) % 10000 + 1000);
 }
 

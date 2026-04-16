@@ -118,7 +118,23 @@ bool GrammarRegistry::load_grammar_dir(const std::string& dir,
     auto info = std::make_unique<GrammarInfo>();
     info->name       = name;
     info->language   = lang_fn();
-    info->highlights = read_file((fs::path(dir) / "highlights.scm").string());
+
+    // Load highlight queries.  Some grammars (e.g. C++) layer their
+    // highlights on top of a base grammar's queries.  If a file called
+    // base_highlights.scm is present, it is prepended to highlights.scm.
+    // This follows tree-sitter's convention where tree-sitter.json lists
+    // multiple highlight files that are concatenated.
+    std::string base_hl = read_file((fs::path(dir) / "base_highlights.scm").string());
+    std::string own_hl  = read_file((fs::path(dir) / "highlights.scm").string());
+
+    if (!base_hl.empty() && !own_hl.empty()) {
+        info->highlights = base_hl + "\n" + own_hl;
+    } else if (!own_hl.empty()) {
+        info->highlights = own_hl;
+    } else {
+        info->highlights = base_hl;  // unlikely but handle gracefully
+    }
+
     info->locals     = read_file((fs::path(dir) / "locals.scm").string());
     info->extensions = read_extensions(dir);
 
