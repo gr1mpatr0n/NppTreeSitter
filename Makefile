@@ -59,27 +59,66 @@ $(BUILD_DIR)/tree-sitter/lib/src/lib.c:
 #   make grammar-c grammar-cpp grammar-python
 #   make plugin grammar-zig grammar-c install-wine
 #
+# Override the repository URL for a specific grammar:
+#   make grammar-elixir REPO_elixir=https://github.com/elixir-lang/tree-sitter-elixir.git
+#
+# The Makefile includes a built-in URL map for grammars whose canonical
+# repos are not under tree-sitter-grammars/ or tree-sitter/.  Override
+# any entry by setting REPO_<lang> on the command line or in the CI env.
+#
 # Each grammar-<n> target:
-#   1. Clones tree-sitter-grammars/tree-sitter-<n> (or tree-sitter/)
+#   1. Clones the grammar repo (using the URL map or fallback search)
 #   2. Compiles parser.c (+ scanner.c if present) into grammar.dll
 #
 # The tree-sitter core is cloned once as a shared prerequisite.
 # ============================================================================
+
+# --- Grammar repository URL map ---
+# Grammars not under tree-sitter-grammars/ or tree-sitter/ orgs.
+REPO_elixir     ?= https://github.com/elixir-lang/tree-sitter-elixir.git
+REPO_kotlin     ?= https://github.com/fwcd/tree-sitter-kotlin.git
+REPO_dart       ?= https://github.com/UserNobwordy/tree-sitter-dart.git
+REPO_gleam      ?= https://github.com/gleam-lang/tree-sitter-gleam.git
+REPO_nix        ?= https://github.com/nix-community/tree-sitter-nix.git
+REPO_vue        ?= https://github.com/tree-sitter-grammars/tree-sitter-vue.git
+REPO_svelte     ?= https://github.com/tree-sitter-grammars/tree-sitter-svelte.git
+REPO_odin       ?= https://github.com/tree-sitter-grammars/tree-sitter-odin.git
+REPO_proto      ?= https://github.com/treywood/tree-sitter-proto.git
+REPO_glsl       ?= https://github.com/tree-sitter-grammars/tree-sitter-glsl.git
+REPO_wgsl       ?= https://github.com/szebniok/tree-sitter-wgsl.git
+REPO_devicetree ?= https://github.com/joelspadin/tree-sitter-devicetree.git
+REPO_meson      ?= https://github.com/tree-sitter-grammars/tree-sitter-meson.git
+REPO_just       ?= https://github.com/IndianBoy42/tree-sitter-just.git
+REPO_kdl        ?= https://github.com/tree-sitter-grammars/tree-sitter-kdl.git
+REPO_astro      ?= https://github.com/virchau13/tree-sitter-astro.git
+REPO_dockerfile ?= https://github.com/camdencheek/tree-sitter-dockerfile.git
+REPO_hcl        ?= https://github.com/tree-sitter-grammars/tree-sitter-hcl.git
+REPO_ocaml      ?= https://github.com/tree-sitter/tree-sitter-ocaml.git
+
 grammar-%: $(BUILD_DIR)/tree-sitter/lib/src/lib.c
 	@set -e; \
 	lang="$*"; \
 	mkdir -p "$(GRAMMAR_DIR)/out/$$lang"; \
 	if [ ! -d "$(GRAMMAR_DIR)/tree-sitter-$$lang" ]; then \
 	    echo "Cloning tree-sitter-$$lang..."; \
-	    if ! GIT_TERMINAL_PROMPT=0 git clone --depth 1 \
+	    repo_var="REPO_$$lang"; \
+	    repo="$(REPO_$*)"; \
+	    if [ -n "$$repo" ]; then \
+	        GIT_TERMINAL_PROMPT=0 git clone --depth 1 "$$repo" \
+	            "$(GRAMMAR_DIR)/tree-sitter-$$lang" \
+	        || { echo "❌ $$lang: failed to clone $$repo"; exit 1; }; \
+	    elif GIT_TERMINAL_PROMPT=0 git clone --depth 1 \
 	        "https://github.com/tree-sitter-grammars/tree-sitter-$$lang.git" \
 	        "$(GRAMMAR_DIR)/tree-sitter-$$lang" 2>/dev/null; then \
-	        if ! GIT_TERMINAL_PROMPT=0 git clone --depth 1 \
-	            "https://github.com/tree-sitter/tree-sitter-$$lang.git" \
-	            "$(GRAMMAR_DIR)/tree-sitter-$$lang"; then \
-	            echo "❌ $$lang: failed to clone grammar repository"; \
-	            exit 1; \
-	        fi; \
+	        true; \
+	    elif GIT_TERMINAL_PROMPT=0 git clone --depth 1 \
+	        "https://github.com/tree-sitter/tree-sitter-$$lang.git" \
+	        "$(GRAMMAR_DIR)/tree-sitter-$$lang" 2>/dev/null; then \
+	        true; \
+	    else \
+	        echo "❌ $$lang: failed to clone grammar repository"; \
+	        echo "   Set REPO_$$lang=<url> to specify the correct repository."; \
+	        exit 1; \
 	    fi; \
 	fi; \
 	if [ ! -f "$(GRAMMAR_DIR)/tree-sitter-$$lang/src/parser.c" ]; then \
@@ -100,6 +139,7 @@ grammar-%: $(BUILD_DIR)/tree-sitter/lib/src/lib.c
 	    -Wl,--export-all-symbols \
 	    -static-libgcc && \
 	echo "✅ $$lang grammar DLL: $(GRAMMAR_DIR)/out/$$lang/grammar.dll"
+
 
 
 # ============================================================================
