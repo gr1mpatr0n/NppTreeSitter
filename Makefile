@@ -28,13 +28,10 @@ MINGW_CXX   := x86_64-w64-mingw32-g++
 # v0.25.6 supports grammar ABI versions 13–15.
 TS_VERSION  := v0.25.6
 
-.PHONY: all plugin grammar package clean install-wine
+.PHONY: all plugin package clean install-wine
 
-# Default: build plugin only.
-# Add grammars individually then install:
-#   make plugin
-#   make grammar NAME=zig
-#   make grammar NAME=c
+# Build plugin + any grammars in one invocation:
+#   make plugin grammar-zig grammar-c grammar-cpp
 #   make install-wine
 all: plugin
 
@@ -55,46 +52,46 @@ $(BUILD_DIR)/tree-sitter/lib/src/lib.c:
 	    $(BUILD_DIR)/tree-sitter
 
 # ============================================================================
-# Generic grammar target.
+# Grammar DLLs — pattern rule.
 #
-# Usage:  make grammar NAME=python
-#         make grammar NAME=c
+# Usage (single or multiple in one invocation):
+#   make grammar-zig
+#   make grammar-c grammar-cpp grammar-python
+#   make plugin grammar-zig grammar-c install-wine
 #
-# Expects the grammar repo to follow the standard naming convention:
-#   https://github.com/tree-sitter-grammars/tree-sitter-<NAME>
-#   or https://github.com/tree-sitter/tree-sitter-<NAME>
+# Each grammar-<n> target:
+#   1. Clones tree-sitter-grammars/tree-sitter-<n> (or tree-sitter/)
+#   2. Compiles parser.c (+ scanner.c if present) into grammar.dll
 #
-# If the grammar has src/scanner.c, it is automatically included.
+# The tree-sitter core is cloned once as a shared prerequisite.
 # ============================================================================
-grammar: $(BUILD_DIR)/tree-sitter/lib/src/lib.c
-ifndef NAME
-	$(error Set NAME=<language>, e.g. make grammar NAME=python)
-endif
-	@mkdir -p $(GRAMMAR_DIR)/out/$(NAME)
-	@if [ ! -d "$(GRAMMAR_DIR)/tree-sitter-$(NAME)" ]; then \
-	    echo "Cloning tree-sitter-$(NAME)..."; \
+grammar-%: $(BUILD_DIR)/tree-sitter/lib/src/lib.c
+	@lang="$*"; \
+	mkdir -p "$(GRAMMAR_DIR)/out/$$lang"; \
+	if [ ! -d "$(GRAMMAR_DIR)/tree-sitter-$$lang" ]; then \
+	    echo "Cloning tree-sitter-$$lang..."; \
 	    git clone --depth 1 \
-	        "https://github.com/tree-sitter-grammars/tree-sitter-$(NAME).git" \
-	        "$(GRAMMAR_DIR)/tree-sitter-$(NAME)" 2>/dev/null \
+	        "https://github.com/tree-sitter-grammars/tree-sitter-$$lang.git" \
+	        "$(GRAMMAR_DIR)/tree-sitter-$$lang" 2>/dev/null \
 	    || git clone --depth 1 \
-	        "https://github.com/tree-sitter/tree-sitter-$(NAME).git" \
-	        "$(GRAMMAR_DIR)/tree-sitter-$(NAME)"; \
-	fi
-	@# Build list of source files — always parser.c, optionally scanner.c
-	@SCANNER=""; \
-	if [ -f "$(GRAMMAR_DIR)/tree-sitter-$(NAME)/src/scanner.c" ]; then \
-	    SCANNER="$(GRAMMAR_DIR)/tree-sitter-$(NAME)/src/scanner.c"; \
+	        "https://github.com/tree-sitter/tree-sitter-$$lang.git" \
+	        "$(GRAMMAR_DIR)/tree-sitter-$$lang"; \
+	fi; \
+	SCANNER=""; \
+	if [ -f "$(GRAMMAR_DIR)/tree-sitter-$$lang/src/scanner.c" ]; then \
+	    SCANNER="$(GRAMMAR_DIR)/tree-sitter-$$lang/src/scanner.c"; \
 	fi; \
 	$(MINGW_CC) -shared -O2 -DNDEBUG \
 	    -I $(BUILD_DIR)/tree-sitter/lib/include \
 	    -I $(BUILD_DIR)/tree-sitter/lib/src \
-	    $(GRAMMAR_DIR)/tree-sitter-$(NAME)/src/parser.c \
+	    "$(GRAMMAR_DIR)/tree-sitter-$$lang/src/parser.c" \
 	    $$SCANNER \
 	    $(BUILD_DIR)/tree-sitter/lib/src/lib.c \
-	    -o $(GRAMMAR_DIR)/out/$(NAME)/grammar.dll \
+	    -o "$(GRAMMAR_DIR)/out/$$lang/grammar.dll" \
 	    -Wl,--export-all-symbols \
-	    -static-libgcc
-	@echo "✅ $(NAME) grammar DLL: $(GRAMMAR_DIR)/out/$(NAME)/grammar.dll"
+	    -static-libgcc; \
+	echo "✅ $$lang grammar DLL: $(GRAMMAR_DIR)/out/$$lang/grammar.dll"
+
 
 # ============================================================================
 # Package — assemble the deployment tree.

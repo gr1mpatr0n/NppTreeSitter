@@ -97,6 +97,8 @@ if(MINGW)
     # MinGW needs to link against Windows system libraries.
     target_link_libraries(${PLUGIN_NAME} PRIVATE
         shlwapi     # path helpers
+        comctl32    # InitCommonControlsEx (SysLink control)
+        shell32     # ShellExecuteW
     )
 
     # Produce a clean DLL with no lib prefix.

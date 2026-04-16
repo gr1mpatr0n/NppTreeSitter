@@ -1,0 +1,154 @@
+# .github/workflows/build.yml
+# Build NppTreeSitter plugin + grammar DLLs using MinGW cross-compilation.
+# On tag pushes matching vX.X.X, create a GitHub Release with the package.
+
+name: Build & Release
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*.*.*']
+  pull_request:
+    branches: [main, master]
+
+env:
+  # Grammars to build.  These are languages NOT offered by Notepad++ built-in.
+  # Each entry becomes a `make grammar-<name>` target.
+  GRAMMARS: >-
+    zig
+    elixir
+    kotlin
+    dart
+    gleam
+    nix
+    hcl
+    dockerfile
+    proto
+    glsl
+    wgsl
+    devicetree
+    meson
+    just
+    odin
+    ocaml
+    vue
+    svelte
+    astro
+    kdl
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install MinGW-w64 toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 cmake
+
+      - name: Build plugin DLL
+        run: make plugin
+
+      - name: Build grammar DLLs
+        run: |
+          # Build all grammars.  Continue on failure for individual grammars
+          # (some repos may be unavailable or have build issues), but track
+          # which ones succeeded.
+          succeeded=""
+          failed=""
+          for lang in ${{ env.GRAMMARS }}; do
+            echo "::group::grammar-$lang"
+            if make grammar-$lang; then
+              succeeded="$succeeded $lang"
+            else
+              echo "::warning::Grammar $lang failed to build"
+              failed="$failed $lang"
+            fi
+            echo "::endgroup::"
+          done
+
+          echo ""
+          echo "=== Build Summary ==="
+          echo "Succeeded:$succeeded"
+          if [ -n "$failed" ]; then
+            echo "Failed:$failed"
+          fi
+
+          # Fail the job if nothing built at all.
+          if [ -z "$succeeded" ]; then
+            echo "::error::No grammars built successfully"
+            exit 1
+          fi
+
+      - name: Package
+        run: make package
+
+      - name: List package contents
+        run: |
+          echo "=== Plugin ==="
+          ls -lh build/package/plugins/NppTreeSitter/
+          echo ""
+          echo "=== Grammars ==="
+          for d in build/package/config/NppTreeSitter/grammars/*/; do
+            lang=$(basename "$d")
+            size=$(stat -c%s "$d/grammar.dll" 2>/dev/null || echo "?")
+            hl=$(wc -l < "$d/highlights.scm" 2>/dev/null || echo "0")
+            base=""
+            if [ -f "$d/base_highlights.scm" ]; then
+              base=" (+base)"
+            fi
+            echo "  $lang: grammar.dll=${size}B, highlights=${hl}L${base}"
+          done
+          echo ""
+          echo "=== XML ==="
+          grep "LexerType" build/package/config/NppTreeSitter.xml
+
+      - name: Create release archive
+        run: |
+          cd build/package
+          zip -r ../../NppTreeSitter-${{ github.ref_name || 'dev' }}.zip .
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NppTreeSitter-package
+          path: build/package/
+          retention-days: 14
+
+      # --- Release (only on vX.X.X tags) ---
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: NppTreeSitter ${{ github.ref_name }}
+          body: |
+            ## NppTreeSitter ${{ github.ref_name }}
+
+            Tree-sitter-based syntax highlighting for Notepad++.
+
+            ### Installation
+
+            1. Extract the zip.
+            2. Copy `plugins/NppTreeSitter/NppTreeSitter.dll` to `<Notepad++>/plugins/NppTreeSitter/`.
+            3. Copy the `config/NppTreeSitter/` folder and `config/NppTreeSitter.xml` to `%APPDATA%\Notepad++\plugins\config\`.
+            4. Restart Notepad++.
+
+            New languages will appear in the **Language** menu.
+
+            ### Included grammars
+
+            Languages not available in Notepad++ by default:
+
+            ${{ env.GRAMMARS }}
+
+            ### Support
+
+            If you find this useful, consider supporting development on [Patreon](https://www.patreon.com/cw/BenMordaunt).
+          files: |
+            NppTreeSitter-${{ github.ref_name }}.zip
+          draft: false
+          prerelease: false

@@ -31,12 +31,16 @@ static StyleMap        g_style_map;
 static bool            g_initialized = false;
 
 // The menu items we expose.
-static FuncItem g_func_items[1];
+static FuncItem g_func_items[2];
 
 // Plugin config directory (filled in by setInfo).
 static std::string g_config_dir;
 // Notepad++'s plugins\Config directory (parent of our own config dir).
 static std::string g_npp_plugin_config_dir;
+
+// Launch counter state.
+static int  g_launch_count   = 0;
+static bool g_support_suppressed = false;
 
 // ============================================================================
 // Helpers
@@ -191,6 +195,50 @@ static void ensure_style_xml() {
 }
 
 // ---------------------------------------------------------------------------
+// Persistent state — tracks launch count and "don't show again" flag.
+// Stored in a simple key=value file: <config_dir>/state.conf
+// ---------------------------------------------------------------------------
+
+static std::string state_file_path() {
+    return (fs::path(g_npp_plugin_config_dir) / "NppTreeSitter" / "state.conf").string();
+}
+
+static void load_state() {
+    std::ifstream f(state_file_path());
+    if (!f.is_open()) return;
+
+    std::string line;
+    while (std::getline(f, line)) {
+        // Strip \r
+        while (!line.empty() && line.back() == '\r') line.pop_back();
+
+        auto eq = line.find('=');
+        if (eq == std::string::npos) continue;
+
+        std::string key = line.substr(0, eq);
+        std::string val = line.substr(eq + 1);
+
+        if (key == "launch_count") {
+            try { g_launch_count = std::stoi(val); } catch (...) {}
+        } else if (key == "support_suppressed") {
+            g_support_suppressed = (val == "1" || val == "true");
+        }
+    }
+}
+
+static void save_state() {
+    // Ensure the directory exists.
+    auto dir = fs::path(g_npp_plugin_config_dir) / "NppTreeSitter";
+    fs::create_directories(dir);
+
+    std::ofstream f(state_file_path(), std::ios::binary);
+    if (!f.is_open()) return;
+
+    f << "launch_count=" << g_launch_count << "\n";
+    f << "support_suppressed=" << (g_support_suppressed ? "1" : "0") << "\n";
+}
+
+// ---------------------------------------------------------------------------
 
 static void initialize() {
     if (g_initialized) return;
@@ -205,9 +253,14 @@ static void initialize() {
 
     // Scan for grammars.
     g_registry.scan(g_config_dir);
+
+    // Load persistent state and increment launch counter.
+    load_state();
+    g_launch_count++;
+    save_state();
 }
 
-// ---- Menu command ----
+// ---- Menu commands ----
 static void about_cmd() {
     MessageBoxW(g_npp_data.nppHandle,
                 L"NppTreeSitter \u2014 tree-sitter-based syntax highlighting for Notepad++.\n\n"
@@ -218,6 +271,193 @@ static void about_cmd() {
                 L"The style XML (NppTreeSitter.xml) is auto-generated\n"
                 L"in plugins\\Config\\ on first run.",
                 L"NppTreeSitter", MB_OK | MB_ICONINFORMATION);
+}
+
+// ---------------------------------------------------------------------------
+// Support / Donate dialog — uses a SysLink control for a clickable URL.
+// Falls back to a plain MessageBox + ShellExecute if SysLink fails.
+// ---------------------------------------------------------------------------
+
+#include <shellapi.h>
+#include <commctrl.h>
+
+static const wchar_t* PATREON_URL = L"https://www.patreon.com/cw/BenMordaunt";
+
+// Dialog return codes.
+static constexpr INT_PTR SUPPORT_DLG_OK          = 1;
+static constexpr INT_PTR SUPPORT_DLG_DONT_SHOW   = 2;
+static constexpr int     IDC_DONT_SHOW           = 102;
+
+static INT_PTR CALLBACK SupportDlgProc(HWND hDlg, UINT msg,
+                                        WPARAM wParam, LPARAM lParam)
+{
+    switch (msg) {
+    case WM_INITDIALOG:
+        return TRUE;
+
+    case WM_COMMAND:
+        if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL) {
+            EndDialog(hDlg, SUPPORT_DLG_OK);
+            return TRUE;
+        }
+        if (LOWORD(wParam) == IDC_DONT_SHOW) {
+            EndDialog(hDlg, SUPPORT_DLG_DONT_SHOW);
+            return TRUE;
+        }
+        break;
+
+    case WM_NOTIFY: {
+        auto* nmhdr = reinterpret_cast<NMHDR*>(lParam);
+        if (nmhdr->code == NM_CLICK || nmhdr->code == NM_RETURN) {
+            ShellExecuteW(nullptr, L"open", PATREON_URL, nullptr, nullptr, SW_SHOWNORMAL);
+            return TRUE;
+        }
+        break;
+    }
+    }
+    return FALSE;
+}
+
+static void support_cmd() {
+    // Build a dialog template in memory.  This avoids the need for a
+    // separate .rc resource file, keeping the plugin as a single source
+    // build with no resource compiler dependency.
+    //
+    // The dialog contains:
+    //   - A static text label (prompt)
+    //   - A SysLink control (clickable URL)
+    //   - An OK button
+    //   - A "Don't Show Again" button
+
+#pragma pack(push, 4)
+    struct {
+        DLGTEMPLATE dlg;
+        WORD menu;      // no menu
+        WORD wndClass;  // default class
+        wchar_t title[24];
+
+        // --- Item 1: static text ---
+        DWORD align1;
+        DLGITEMTEMPLATE item1;
+        WORD item1Class[2];  // 0xFFFF, 0x0082 = STATIC
+        wchar_t item1Text[80];
+        WORD item1Extra;
+
+        // --- Item 2: SysLink ---
+        DWORD align2;
+        DLGITEMTEMPLATE item2;
+        wchar_t item2ClassName[8];  // L"SysLink"
+        wchar_t item2Text[128];
+        WORD item2Extra;
+
+        // --- Item 3: OK button ---
+        DWORD align3;
+        DLGITEMTEMPLATE item3;
+        WORD item3Class[2];  // 0xFFFF, 0x0080 = BUTTON
+        wchar_t item3Text[4];
+        WORD item3Extra;
+
+        // --- Item 4: Don't Show Again button ---
+        DWORD align4;
+        DLGITEMTEMPLATE item4;
+        WORD item4Class[2];  // 0xFFFF, 0x0080 = BUTTON
+        wchar_t item4Text[20];
+        WORD item4Extra;
+    } tmpl{};
+#pragma pack(pop)
+
+    // Dialog
+    tmpl.dlg.style = DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU | DS_SETFONT;
+    tmpl.dlg.cdit  = 4;
+    tmpl.dlg.cx    = 220;
+    tmpl.dlg.cy    = 110;
+    tmpl.menu      = 0;
+    tmpl.wndClass  = 0;
+    wcscpy(tmpl.title, L"Support NppTreeSitter");
+
+    // Item 1: static label
+    tmpl.item1.style = WS_CHILD | WS_VISIBLE | SS_CENTER;
+    tmpl.item1.x  = 10;  tmpl.item1.y  = 10;
+    tmpl.item1.cx = 200; tmpl.item1.cy = 28;
+    tmpl.item1.id = 100;
+    tmpl.item1Class[0] = 0xFFFF;
+    tmpl.item1Class[1] = 0x0082;  // STATIC
+    wcscpy(tmpl.item1Text,
+           L"NppTreeSitter is free and open source.\r\n"
+           L"If you find it useful, please consider supporting\r\n"
+           L"its development on Patreon:");
+    tmpl.item1Extra = 0;
+
+    // Item 2: SysLink
+    tmpl.item2.style = WS_CHILD | WS_VISIBLE | WS_TABSTOP;
+    tmpl.item2.x  = 10;  tmpl.item2.y  = 45;
+    tmpl.item2.cx = 200; tmpl.item2.cy = 14;
+    tmpl.item2.id = 101;
+    wcscpy(tmpl.item2ClassName, L"SysLink");
+    wcscpy(tmpl.item2Text,
+           L"<a href=\"https://www.patreon.com/cw/BenMordaunt\">"
+           L"https://www.patreon.com/cw/BenMordaunt</a>");
+    tmpl.item2Extra = 0;
+
+    // Item 3: OK button
+    tmpl.item3.style = WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON;
+    tmpl.item3.x  = 40;  tmpl.item3.y  = 70;
+    tmpl.item3.cx = 50;  tmpl.item3.cy = 14;
+    tmpl.item3.id = IDOK;
+    tmpl.item3Class[0] = 0xFFFF;
+    tmpl.item3Class[1] = 0x0080;  // BUTTON
+    wcscpy(tmpl.item3Text, L"OK");
+    tmpl.item3Extra = 0;
+
+    // Item 4: Don't Show Again button
+    tmpl.item4.style = WS_CHILD | WS_VISIBLE | WS_TABSTOP;
+    tmpl.item4.x  = 110; tmpl.item4.y  = 70;
+    tmpl.item4.cx = 72;  tmpl.item4.cy = 14;
+    tmpl.item4.id = IDC_DONT_SHOW;
+    tmpl.item4Class[0] = 0xFFFF;
+    tmpl.item4Class[1] = 0x0080;  // BUTTON
+    wcscpy(tmpl.item4Text, L"Don't Show Again");
+    tmpl.item4Extra = 0;
+
+    // Ensure common controls are loaded (needed for SysLink).
+    INITCOMMONCONTROLSEX icc{};
+    icc.dwSize = sizeof(icc);
+    icc.dwICC  = ICC_LINK_CLASS;
+    InitCommonControlsEx(&icc);
+
+    INT_PTR result = DialogBoxIndirectW(
+        nullptr,
+        &tmpl.dlg,
+        g_npp_data.nppHandle,
+        SupportDlgProc
+    );
+
+    if (result == SUPPORT_DLG_DONT_SHOW) {
+        g_support_suppressed = true;
+        save_state();
+    }
+
+    // Fallback if the dialog failed (e.g. SysLink not available under Wine).
+    if (result == -1) {
+        int choice = MessageBoxW(
+            g_npp_data.nppHandle,
+            L"NppTreeSitter is free and open source.\n\n"
+            L"If you find it useful, please consider supporting\n"
+            L"its development on Patreon:\n\n"
+            L"https://www.patreon.com/cw/BenMordaunt\n\n"
+            L"Click YES to open the Patreon page.\n"
+            L"Click NO to never show this again.\n"
+            L"Click CANCEL to dismiss.",
+            L"Support NppTreeSitter",
+            MB_YESNOCANCEL | MB_ICONINFORMATION
+        );
+        if (choice == IDYES) {
+            ShellExecuteW(nullptr, L"open", PATREON_URL, nullptr, nullptr, SW_SHOWNORMAL);
+        } else if (choice == IDNO) {
+            g_support_suppressed = true;
+            save_state();
+        }
+    }
 }
 
 // ============================================================================
@@ -245,7 +485,14 @@ FuncItem* plugin_getFuncsArray(int* nbF) {
     g_func_items[0].init2Check = false;
     g_func_items[0].pShKey    = nullptr;
 
-    *nbF = 1;
+    std::wcsncpy(g_func_items[1].itemName, L"Support this plugin...", nbChar - 1);
+    g_func_items[1].itemName[nbChar - 1] = L'\0';
+    g_func_items[1].pFunc     = support_cmd;
+    g_func_items[1].cmdID     = 0;
+    g_func_items[1].init2Check = false;
+    g_func_items[1].pShKey    = nullptr;
+
+    *nbF = 2;
     return g_func_items;
 }
 
@@ -253,6 +500,12 @@ void plugin_beNotified(SCNotification* notification) {
     switch (notification->nmhdr_code) {
     case NPPN_READY:
         initialize();
+
+        // Show the support dialog every 5 launches, unless suppressed.
+        if (!g_support_suppressed && g_launch_count > 0 &&
+            (g_launch_count % 5) == 0) {
+            support_cmd();
+        }
         break;
 
     case NPPN_BUFFERACTIVATED:
